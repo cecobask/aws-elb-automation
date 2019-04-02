@@ -12,6 +12,7 @@ config = Config(
 
 ec2 = boto3.resource('ec2', config=config)
 elb = boto3.client('elbv2')
+autoscaling = boto3.client('autoscaling')
 waiter = boto3.client('ec2').get_waiter('instance_running')
 instance_ids = []
 
@@ -36,7 +37,7 @@ def create_load_balancer():
 
 def create_instance(instance_name, subnet_id):
     instance = ec2.create_instances(
-        ImageId='ami-01a515d84f5f30052',
+        ImageId='ami-0157ecca833d5d515',
         InstanceType="t2.micro",
         KeyName='slav_awskey',
         MinCount=1,
@@ -59,7 +60,10 @@ def create_instance(instance_name, subnet_id):
                     },
                 ]
             },
-        ]
+        ],
+        UserData='''#!/bin/bash
+                        sudo yum -y update
+                        sudo ./mem.sh'''
     )
 
     print(f"\nAn instance with ID {instance[0].id} is being created.")
@@ -90,9 +94,9 @@ def create_target_group():
 
     # check create target-group returned successfully
     if create_tg_response['ResponseMetadata']['HTTPStatusCode'] == 200:
-        tg_id = create_tg_response['TargetGroups'][0]['TargetGroupArn']
-        print(f"\nSuccessfully created target group {tg_id}.")
-        return tg_id
+        tg_arn = create_tg_response['TargetGroups'][0]['TargetGroupArn']
+        print(f"\nSuccessfully created target group {tg_arn}.")
+        return tg_arn
     else:
         print("\nCreate target group failed.")
 
@@ -125,7 +129,22 @@ def create_elb_listener(tg_id, lb_id):
     if create_listener_response['ResponseMetadata']['HTTPStatusCode'] == 200:
         print(f"\nSuccessfully created listener for {tg_id}")
     else:
-        print("\nCreate listener failed")
+        print("\nCreate listener failed.")
+
+
+def attach_tg_to_asg(tg_arn):
+    attach_tg_response = autoscaling.attach_load_balancer_target_groups(
+        AutoScalingGroupName='Assgnmnt-asg',
+        TargetGroupARNs=[
+            tg_arn,
+        ]
+    )
+
+    # Check attaching was successful
+    if attach_tg_response['ResponseMetadata']['HTTPStatusCode'] == 200:
+        print(f"\nSuccessfully attached {tg_arn} to ASG 'Assgnmnt-asg'")
+    else:
+        print("\nAttachment of Target Group to Auto Scaling Group failed.")
 
 
 def main():
@@ -133,9 +152,10 @@ def main():
     create_instance('WebServer 1a', 'subnet-0df2c5bd0bcda0308')
     create_instance('WebServer 1b', 'subnet-0898c6a25c05a612b')
     create_instance('WebServer 1c', 'subnet-0c633d627ec94f13e')
-    tg_id = create_target_group()
-    register_targets(tg_id)
-    create_elb_listener(tg_id, lb_id)
+    tg_arn = create_target_group()
+    register_targets(tg_arn)
+    create_elb_listener(tg_arn, lb_id)
+    attach_tg_to_asg(tg_arn)
 
 
 if __name__ == '__main__':
